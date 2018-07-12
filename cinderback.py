@@ -27,6 +27,7 @@ import os
 import sys
 import time
 
+import keystoneauth1
 from cinderclient import client
 from cinderclient import v2
 from cinderclient import __version__ as cinder_version
@@ -778,18 +779,28 @@ class BackupService(object):
 
     def get_client(self, tenant_id, keep_tenant=True):
         """Return a client for requested tenant"""
-        # If we are the original tenant of the volume
-        if (not keep_tenant or
-                self.client.client.auth_ref['token']['tenant']['id']
-                == tenant_id):
+        if not keep_tenant:
             return self.client
 
-        _LI("Using tenant id %s", tenant_id)
-        return client.Client(version=2,
-                             username=self.username,
-                             api_key=self.api_key,
-                             tenant_id=tenant_id,
-                             auth_url=self.auth_url)
+        auth_ref = self.client.client.auth_ref
+
+        # Get project ID for Keystone V3
+        if isinstance(auth_ref, keystoneauth1.access.access.AccessInfoV3):
+            auth_project_id = auth_ref.project_id
+        # Get project ID for Keystone v2
+        else:
+            auth_project_id = auth_ref['token']['tenant']['id']
+
+        if auth_project_id == tenant_id:
+            return self.client
+        else:
+
+            _LI("Using tenant id %s", tenant_id)
+            return client.Client(version=2,
+                                 username=self.username,
+                                 api_key=self.api_key,
+                                 tenant_id=tenant_id,
+                                 auth_url=self.auth_url)
 
     def import_metadata(self, filename):
         """Import backup metadata to DB from file."""
