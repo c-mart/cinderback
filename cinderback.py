@@ -27,7 +27,8 @@ import os
 import sys
 import time
 
-import keystoneauth1
+from keystoneauth1 import loading
+from keystoneauth1 import session
 from cinderclient import client
 from cinderclient import v2
 from cinderclient import __version__ as cinder_version
@@ -138,6 +139,20 @@ def get_arg_parser():
                         default=os.environ.get('OS_AUTH_URL', ''),
                         help='URL for the authentication service. '
                              'Default=env[OS_AUTH_URL]')
+    parser.add_argument('--os-project-domain-name',
+                        metavar='<project-domain-name>',
+                        dest='project_domain_name',
+                        default=os.environ.get('OS_PROJECT_DOMAIN_NAME',
+                                               'Default'),
+                        help='Domain name for OpenStack project. '
+                             'Default=env[OS_PROJECT_DOMAIN_NAME]')
+    parser.add_argument('--os-user-domain-name',
+                        metavar='<user-domain-name>',
+                        dest='user_domain_name',
+                        default=os.environ.get('OS_USER_DOMAIN_NAME',
+                                               'Default'),
+                        help='Domain name for OpenStack user. '
+                             'Default=env[OS_USER_DOMAIN_NAME]')
     parser.add_argument('-q', '--quiet', dest='quiet',
                         default=False, action='store_true',
                         help='No output except warnings or errors')
@@ -324,23 +339,30 @@ class BackupService(object):
     WANT_V = '1.1.1'
     HAS_SEARCH_OPTS = LooseVersion(cinder_version) >= LooseVersion(WANT_V)
 
-    def __init__(self, username, api_key, project_id, auth_url,
-                 poll_delay=None, name_prefix='auto_backup_',
-                 max_secs_gbi=None):
+    def __init__(self, username, api_key, project_name, auth_url,
+                 project_domain_name, user_domain_name, poll_delay=None,
+                 name_prefix='auto_backup_', max_secs_gbi=None):
         super(BackupService, self).__init__()
         self.username = username
         self.api_key = api_key
-        self.project_id = project_id
+        self.project_name = project_name
         self.auth_url = auth_url
+        self.project_domain_name = project_domain_name
+        self.user_domain_name = user_domain_name
         self.poll_delay = poll_delay or self.default_poll_deplay
         self.name_prefix = name_prefix
 
+        loader = loading.get_plugin_loader('password')
+        auth = loader.load_from_options(auth_url=auth_url,
+                                        username=username,
+                                        password=api_key,
+                                        project_name=project_name,
+                                        project_domain_name=
+                                        project_domain_name,
+                                        user_domain_name=user_domain_name)
+        sess = session.Session(auth=auth)
         # Some functionality requires API version 2
-        self.client = client.Client(version=2,
-                                    username=username,
-                                    api_key=api_key,
-                                    project_id=project_id,
-                                    auth_url=auth_url)
+        self.client = client.Client(2, session=sess)
 
         self.status_msg = ''
         self.max_secs_gbi = max_secs_gbi or 300
@@ -782,25 +804,26 @@ class BackupService(object):
         if not keep_tenant:
             return self.client
 
-        auth_ref = self.client.client.auth_ref
-
-        # Get project ID for Keystone V3
-        if isinstance(auth_ref, keystoneauth1.access.access.AccessInfoV3):
-            auth_project_id = auth_ref.project_id
-        # Get project ID for Keystone v2
-        else:
-            auth_project_id = auth_ref['token']['tenant']['id']
+        auth_project_id = self.client.client.get_project_id()
 
         if auth_project_id == tenant_id:
             return self.client
         else:
 
             _LI("Using tenant id %s", tenant_id)
-            return client.Client(version=2,
-                                 username=self.username,
-                                 api_key=self.api_key,
-                                 tenant_id=tenant_id,
-                                 auth_url=self.auth_url)
+
+            loader = loading.get_plugin_loader('password')
+            auth = loader.load_from_options(auth_url=self.auth_url,
+                                            username=self.username,
+                                            password=self.api_key,
+                                            project_id=tenant_id,
+                                            project_domain_name=
+                                            self.project_domain_name,
+                                            user_domain_name=
+                                            self.user_domain_name)
+            sess = session.Session(auth=auth)
+            # Some functionality requires API version 2
+            return client.Client(2, session=sess)
 
     def import_metadata(self, filename):
         """Import backup metadata to DB from file."""
@@ -849,8 +872,10 @@ class BackupService(object):
 def main(args):
     backup = BackupService(username=args.username,
                            api_key=args.password,
-                           project_id=args.tenant_name,
+                           project_name=args.tenant_name,
                            auth_url=args.auth_url,
+                           project_domain_name=args.project_domain_name,
+                           user_domain_name=args.user_domain_name,
                            max_secs_gbi=getattr(args, 'max_secs_gbi', None))
 
     if not backup.is_up:
