@@ -578,51 +578,18 @@ class BackupService(object):
         # Use encoded original volume info as description
         description = BackupInfo(volume)
 
-        if volume.status == 'in-use':
-            _LI('Volume online so this is a multi-step process')
-
-            # Force snapshot since volume it's in-use
-            snapshot = self._create_and_wait(
-                'Creating snapshot', client.volume_snapshots,
-                arguments=dict(
-                    volume_id=volume.id, force=True, name='tmp ' + name,
-                    description='Temporary snapshot for backup',
-                    metadata=volume.metadata))
-
-            # Create temporary volume from snapshot
-            tmp_vol = self._create_and_wait(
-                'Creating temp volume from snapshot', client.volumes,
-                arguments=dict(
-                    size=snapshot.size, snapshot_id=snapshot.id,
-                    name='tmp '+name,
-                    description='Temporary volume for backup',
-                    metadata=volume.metadata), resources=(snapshot,))
-
-            # Backup temporary volume
+        if volume.status in ['available', 'in-use']:
             backup = self._create_and_wait(
-                'Doing the actual backup', client.backups,
-                arguments=dict(
-                    volume_id=tmp_vol.id, name=name, container=None,
-                    description=str(description)),
-                resources=(snapshot, tmp_vol))
-
-            # Cleanup temporary resources
-            _LI('Deleting temporary volume and snapshot')
-            tmp_vol.delete()
-            snapshot.delete()
-
-        elif volume.status == 'available':
-            backup = self._create_and_wait(
-                'Creating direct backup', client.backups,
+                'Creating backup', client.backups,
                 arguments=dict(
                     volume_id=volume.id, name=name, container=None,
-                    description=str(description)))
+                    description=str(description), force=True))
+            return backup
 
         else:
             _LE("We don't backup volume because status is %s", volume.status)
             raise UnexpectedStatus(what=volume)
 
-        return backup
 
     def _is_auto_backup(self, backup):
         """Check if a backup was created by us."""
