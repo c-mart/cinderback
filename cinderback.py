@@ -271,6 +271,12 @@ class BackupInfo(object):
                                            'os-vol-tenant-attr:tenant_id')
             self.name = data.name
             self.description = data.description
+            if len(self.__repr__()) > 255:
+                _LI('Backup description too long, truncating description field')
+                self.description = ''
+                if len(self.__repr__()) > 255:
+                    _LI('Backup description still too long, truncating name field')
+                    self.name = ''
 
         # We don't know how to treat additional types
         else:
